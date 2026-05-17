@@ -20,6 +20,39 @@ def extract_video_id(url: str) -> str:
 
     raise ValueError(f"Could not get video id from: {url}")
 
+
+def chunk_transcript(transcript, chunk_size=300, overlap=50):
+    """
+    Split a transcript into overlapping word windows for embedding/search.
+
+    Each YouTube caption entry has text + start (seconds). We flatten all
+    words while remembering which start time each word came from, then slice
+    into chunks. overlap keeps ~50 words repeated between chunks so sentences
+    split at a boundary still have context in at least one chunk.
+    """
+    words = []
+    for entry in transcript:
+        text = entry["text"] if isinstance(entry, dict) else entry.text
+        start = entry["start"] if isinstance(entry, dict) else entry.start
+        for word in text.split():
+            words.append({"word": word, "start": start})
+
+    chunks = []
+    i = 0
+    while i < len(words):
+        chunk_words = words[i : i + chunk_size]
+        if not chunk_words:
+            break
+        chunks.append(
+            {
+                "text": " ".join(w["word"] for w in chunk_words),
+                "start": chunk_words[0]["start"],
+            }
+        )
+        i += chunk_size - overlap
+    return chunks
+
+
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -31,13 +64,14 @@ app.add_middleware(
 
 @app.post("/transcript")
 def get_transcript(body: dict):
-    video_id = extract_video_id(body) 
-    ytt_appi = YouTubeTranscriptApi()
-    transcript = ytt_appi.fetch(video_id)
-    return {"transcript": transcript, "video_id": video_id}
+    video_id = extract_video_id(body["url"])
+    ytt_api = YouTubeTranscriptApi()
+    transcript = ytt_api.fetch(video_id)
+    chunks = chunk_transcript(transcript)
+    return {"transcript": transcript, "chunks": chunks, "video_id": video_id}
+
 
 def main():
-  print(get_transcript("https://www.youtube.com/watch?v=vztTLzRXCSw"))
   return 0
 
 if __name__ == "__main__":
