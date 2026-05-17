@@ -1,9 +1,17 @@
 # main.py
+import os
 from urllib.parse import parse_qs, urlparse
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from openai import AsyncOpenAI
 from youtube_transcript_api import YouTubeTranscriptApi
+
+load_dotenv()
+
+client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+EMBEDDING_MODEL = "text-embedding-3-small"
 
 
 def extract_video_id(url: str) -> str:
@@ -53,6 +61,25 @@ def chunk_transcript(transcript, chunk_size=300, overlap=50):
     return chunks
 
 
+async def embed_text(text: str) -> list[float]:
+    response = await client.embeddings.create(
+        input=text,
+        model=EMBEDDING_MODEL,
+    )
+    return response.data[0].embedding
+
+
+async def embed_chunks(chunks: list[dict]) -> list[dict]:
+    if not chunks:
+        return chunks
+
+    texts = [c["text"] for c in chunks]
+    response = await client.embeddings.create(input=texts, model=EMBEDDING_MODEL)
+    for i, chunk in enumerate(chunks):
+        chunk["embedding"] = response.data[i].embedding
+    return chunks
+
+
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -63,12 +90,13 @@ app.add_middleware(
 )
 
 @app.post("/transcript")
-def get_transcript(body: dict):
+async def get_transcript(body: dict):
     video_id = extract_video_id(body["url"])
     ytt_api = YouTubeTranscriptApi()
     transcript = ytt_api.fetch(video_id)
     chunks = chunk_transcript(transcript)
-    return {"transcript": transcript, "chunks": chunks, "video_id": video_id}
+    chunks = await embed_chunks(chunks)
+    return {"video_id": video_id, "chunk_count": len(chunks), "chunks": chunks}
 
 
 def main():
