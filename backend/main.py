@@ -6,12 +6,16 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from openai import AsyncOpenAI
+from pinecone import Pinecone
 from youtube_transcript_api import YouTubeTranscriptApi
 
 load_dotenv()
 
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 EMBEDDING_MODEL = "text-embedding-3-small"
+
+pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+index = pc.Index(os.getenv("PINECONE_INDEX_NAME", "youtube-search"))
 
 
 def extract_video_id(url: str) -> str:
@@ -80,6 +84,29 @@ async def embed_chunks(chunks: list[dict]) -> list[dict]:
     return chunks
 
 
+def upsert_chunks(chunks: list[dict], video_id: str) -> int:
+    """Store chunk embeddings in Pinecone, scoped to this video via namespace."""
+    vectors = []
+    for i, chunk in enumerate(chunks):
+        vectors.append(
+            {
+                "id": f"{video_id}-{i}",
+                "values": chunk["embedding"],
+                "metadata": {
+                    "text": chunk["text"],
+                    "start": chunk["start"],
+                    "video_id": video_id,
+                },
+            }
+        )
+
+    if not vectors:
+        return 0
+
+    index.upsert(vectors=vectors, namespace=video_id)
+    return len(vectors)
+
+
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -96,7 +123,12 @@ async def get_transcript(body: dict):
     transcript = ytt_api.fetch(video_id)
     chunks = chunk_transcript(transcript)
     chunks = await embed_chunks(chunks)
-    return {"video_id": video_id, "chunk_count": len(chunks), "chunks": chunks}
+    upserted = upsert_chunks(chunks, video_id)
+    return {
+        "video_id": video_id,
+        "chunk_count": upserted,
+        "indexed": True,
+    }
 
 
 def main():

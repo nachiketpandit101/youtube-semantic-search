@@ -3,3 +3,4 @@ uvicorn
 python-dotenv
 openai
 youtube-transcript-api
+pinecone
