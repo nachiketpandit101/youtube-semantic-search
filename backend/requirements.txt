@@ -1,6 +1,6 @@
 fastapi
 uvicorn
 python-dotenv
-openai
 youtube-transcript-api
 pinecone
+sentence-transformers
