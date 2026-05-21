@@ -32,7 +32,8 @@ llm_client = AsyncOpenAI(
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 index = pc.Index(os.getenv("PINECONE_INDEX_NAME", "youtube-search"))
 
-SCORE_THRESHOLD = 0.75
+# BGE cosine scores are usually lower than OpenAI's; 0.75 filters out everything.
+SCORE_THRESHOLD = float(os.getenv("SCORE_THRESHOLD", "0.35"))
 
 
 def extract_video_id(url: str) -> str:
@@ -50,13 +51,25 @@ def extract_video_id(url: str) -> str:
     raise ValueError(f"Could not get video id from: {url}")
 
 
+def normalize_transcript(transcript) -> list[dict]:
+    """YouTube API objects → plain [{text, start}, ...] for UI + chunking."""
+    lines = []
+    for entry in transcript:
+        text = entry["text"] if isinstance(entry, dict) else entry.text
+        start = entry["start"] if isinstance(entry, dict) else entry.start
+        text = str(text).replace("\n", " ").strip()
+        if text:
+            lines.append({"text": text, "start": float(start)})
+    return lines
+
+
 def chunk_transcript(transcript, chunk_size=300, overlap=50):
     """Split transcript into overlapping word windows for embedding/search."""
     words = []
     for entry in transcript:
         text = entry["text"] if isinstance(entry, dict) else entry.text
-        start = entry["start"] if isinstance(entry, dict) else entry.start
-        for word in text.split():
+        start = float(entry["start"] if isinstance(entry, dict) else entry.start)
+        for word in str(text).split():
             words.append({"word": word, "start": start})
 
     chunks = []
@@ -148,20 +161,24 @@ async def search_chunks(question: str, video_id: str) -> list[dict]:
     )
 
     matches = results.matches if hasattr(results, "matches") else results["matches"]
-    chunks = []
+    if not matches:
+        return []
+
+    ranked = []
     for match in matches:
         score = _match_score(match)
-        if score < SCORE_THRESHOLD:
-            continue
         meta = _match_metadata(match)
-        chunks.append(
+        ranked.append(
             {
-                "text": meta["text"],
-                "start": meta["start"],
+                "text": meta.get("text", ""),
+                "start": float(meta.get("start", 0)),
                 "score": round(score, 4),
             }
         )
-    return chunks
+
+    # Prefer matches above threshold; if none pass, keep top results anyway
+    filtered = [c for c in ranked if c["score"] >= SCORE_THRESHOLD]
+    return filtered if filtered else ranked[:3]
 
 
 app = FastAPI()
@@ -236,10 +253,19 @@ async def get_transcript(body: dict):
     try:
         video_id = extract_video_id(url)
         ytt_api = YouTubeTranscriptApi()
-        transcript = ytt_api.fetch(video_id)
-        chunks = chunk_transcript(transcript)
+        raw = ytt_api.fetch(video_id)
+        lines = normalize_transcript(raw)
+        if not lines:
+            raise ValueError("No transcript captions found for this video")
+
+        chunks = chunk_transcript(lines)
+        if not chunks:
+            raise ValueError("Transcript too short to index")
+
         chunks = await embed_chunks(chunks)
         upserted = upsert_chunks(chunks, video_id)
+        if upserted == 0:
+            raise ValueError("Failed to store vectors in Pinecone")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -254,6 +280,7 @@ async def get_transcript(body: dict):
         "indexed": True,
         "embedding_model": EMBEDDING_MODEL_NAME,
         "dimensions": EMBEDDING_DIM,
+        "transcript": lines,
     }
 
 

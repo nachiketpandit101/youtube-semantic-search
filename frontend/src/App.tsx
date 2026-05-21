@@ -16,6 +16,11 @@ type Source = {
   score: number
 }
 
+type TranscriptLine = {
+  text: string
+  start: number
+}
+
 function extractVideoId(url: string): string | null {
   const trimmed = url.trim()
   if (!trimmed) return null
@@ -131,6 +136,7 @@ function App() {
   const [urlError, setUrlError] = useState<string | null>(null)
   const [askError, setAskError] = useState<string | null>(null)
   const [chunkCount, setChunkCount] = useState<number | null>(null)
+  const [transcript, setTranscript] = useState<TranscriptLine[]>([])
   const [answer, setAnswer] = useState<string | null>(null)
   const [sources, setSources] = useState<Source[]>([])
 
@@ -147,6 +153,7 @@ function App() {
     setAnswer(null)
     setSources([])
     setChunkCount(null)
+    setTranscript([])
     setVideoId(id)
     setQuery('')
     setPhase('loading_transcript')
@@ -159,7 +166,13 @@ function App() {
       })
       if (!res.ok) throw new Error(await parseApiError(res))
       const data = await res.json()
+      if (!data.chunk_count) {
+        throw new Error(
+          'Transcript indexed 0 chunks. Try another video with captions enabled.',
+        )
+      }
       setChunkCount(data.chunk_count)
+      setTranscript(data.transcript ?? [])
       setPhase('transcript_ready')
     } catch (err) {
       setPhase('idle')
@@ -172,7 +185,13 @@ function App() {
 
   const handleAsk = async (e: FormEvent) => {
     e.preventDefault()
-    if (!query.trim() || !videoId || phase !== 'transcript_ready') return
+    if (
+      !query.trim() ||
+      !videoId ||
+      (phase !== 'transcript_ready' && phase !== 'answer_ready')
+    ) {
+      return
+    }
 
     setAskError(null)
     setAnswer(null)
@@ -274,14 +293,39 @@ function App() {
             </div>
 
             <div className="panel panel--transcript">
-              <h2 className="panel__title">Transcript</h2>
+              <h2 className="panel__title">
+                Transcript
+                {chunkCount != null && (
+                  <span className="panel__badge">{chunkCount} chunks indexed</span>
+                )}
+              </h2>
               {transcriptBusy ? (
                 <TranscriptSkeleton />
+              ) : transcript.length > 0 ? (
+                <div className="transcript-view">
+                  {transcript.map((line, i) => (
+                    <div key={`${line.start}-${i}`} className="transcript-line">
+                      <button
+                        type="button"
+                        className="transcript-line__time"
+                        onClick={() => {
+                          const el = document.querySelector('.video-embed iframe')
+                          if (el instanceof HTMLIFrameElement) {
+                            el.src = `https://www.youtube.com/embed/${videoId}?start=${Math.floor(line.start)}&autoplay=1`
+                          }
+                        }}
+                        title="Jump to this moment"
+                      >
+                        {formatTimestamp(line.start)}
+                      </button>
+                      <p className="transcript-line__text">{line.text}</p>
+                    </div>
+                  ))}
+                </div>
               ) : (
                 <p className="panel__placeholder">
-                  {chunkCount != null
-                    ? `Indexed ${chunkCount} chunks. Ready for semantic Q&A.`
-                    : 'Transcript indexed.'}
+                  No transcript lines returned. Reload the video or pick one with
+                  captions.
                 </p>
               )}
             </div>
