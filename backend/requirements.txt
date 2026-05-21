@@ -4,3 +4,4 @@ python-dotenv
 youtube-transcript-api
 pinecone
 sentence-transformers
+openai

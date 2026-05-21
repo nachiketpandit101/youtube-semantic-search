@@ -1,12 +1,20 @@
 import { useState, type FormEvent } from 'react'
 import './App.css'
 
+const API = import.meta.env.VITE_API_URL ?? '/api'
+
 type Phase =
   | 'idle'
   | 'loading_transcript'
   | 'transcript_ready'
   | 'generating_answer'
   | 'answer_ready'
+
+type Source = {
+  text: string
+  start: number
+  score: number
+}
 
 function extractVideoId(url: string): string | null {
   const trimmed = url.trim()
@@ -34,6 +42,22 @@ function extractVideoId(url: string): string | null {
   if (watchMatch) return watchMatch[1]
 
   return null
+}
+
+function formatTimestamp(seconds: number) {
+  const m = Math.floor(seconds / 60)
+  const s = Math.floor(seconds % 60)
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+async function parseApiError(res: Response): Promise<string> {
+  try {
+    const data = await res.json()
+    if (typeof data.detail === 'string') return data.detail
+    return JSON.stringify(data.detail ?? data)
+  } catch {
+    return res.statusText || `Request failed (${res.status})`
+  }
 }
 
 function SkeletonLine({
@@ -105,34 +129,76 @@ function App() {
   const [phase, setPhase] = useState<Phase>('idle')
   const [query, setQuery] = useState('')
   const [urlError, setUrlError] = useState<string | null>(null)
+  const [askError, setAskError] = useState<string | null>(null)
+  const [chunkCount, setChunkCount] = useState<number | null>(null)
+  const [answer, setAnswer] = useState<string | null>(null)
+  const [sources, setSources] = useState<Source[]>([])
 
-  const handleLoadVideo = (e: FormEvent) => {
+  const handleLoadVideo = async (e: FormEvent) => {
     e.preventDefault()
     const id = extractVideoId(url)
     if (!id) {
       setUrlError('Paste a valid YouTube link (watch or youtu.be).')
       return
     }
+
     setUrlError(null)
+    setAskError(null)
+    setAnswer(null)
+    setSources([])
+    setChunkCount(null)
     setVideoId(id)
     setQuery('')
     setPhase('loading_transcript')
 
-    // Demo: simulate transcript fetch — replace with API call
-    window.setTimeout(() => setPhase('transcript_ready'), 2400)
+    try {
+      const res = await fetch(`${API}/transcript`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      })
+      if (!res.ok) throw new Error(await parseApiError(res))
+      const data = await res.json()
+      setChunkCount(data.chunk_count)
+      setPhase('transcript_ready')
+    } catch (err) {
+      setPhase('idle')
+      setVideoId(null)
+      setUrlError(
+        err instanceof Error ? err.message : 'Failed to load transcript',
+      )
+    }
   }
 
-  const handleSearch = (e: FormEvent) => {
+  const handleAsk = async (e: FormEvent) => {
     e.preventDefault()
-    if (!query.trim() || phase !== 'transcript_ready') return
+    if (!query.trim() || !videoId || phase !== 'transcript_ready') return
+
+    setAskError(null)
+    setAnswer(null)
+    setSources([])
     setPhase('generating_answer')
 
-    window.setTimeout(() => setPhase('answer_ready'), 2000)
+    try {
+      const res = await fetch(`${API}/ask`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: query, video_id: videoId }),
+      })
+      if (!res.ok) throw new Error(await parseApiError(res))
+      const data = await res.json()
+      setAnswer(data.answer)
+      setSources(data.sources ?? [])
+      setPhase('answer_ready')
+    } catch (err) {
+      setPhase('transcript_ready')
+      setAskError(err instanceof Error ? err.message : 'Failed to generate answer')
+    }
   }
 
   const transcriptBusy = phase === 'loading_transcript'
   const answerBusy = phase === 'generating_answer'
-  const canSearch =
+  const canAsk =
     phase === 'transcript_ready' ||
     phase === 'generating_answer' ||
     phase === 'answer_ready'
@@ -164,9 +230,14 @@ function App() {
             }}
             autoComplete="off"
             spellCheck={false}
+            disabled={transcriptBusy}
           />
-          <button type="submit" className="btn btn--primary">
-            Load video
+          <button
+            type="submit"
+            className="btn btn--primary"
+            disabled={transcriptBusy}
+          >
+            {transcriptBusy ? 'Indexing…' : 'Load video'}
           </button>
         </div>
         {urlError && (
@@ -188,12 +259,15 @@ function App() {
               />
             </div>
 
-            {/* Transcript status lives directly under the player so tied to indexing, not Q&A */}
             <div className="transcript-status-bar">
               <StatusPill
                 variant="transcript"
                 label={
-                  transcriptBusy ? 'Loading transcript…' : 'Transcript ready'
+                  transcriptBusy
+                    ? 'Loading transcript…'
+                    : chunkCount != null
+                      ? `Transcript ready · ${chunkCount} chunks`
+                      : 'Transcript ready'
                 }
                 loading={transcriptBusy}
               />
@@ -205,15 +279,16 @@ function App() {
                 <TranscriptSkeleton />
               ) : (
                 <p className="panel__placeholder">
-                  Transcript text will appear here once indexed. For the demo,
-                  imagine caption lines filling this panel.
+                  {chunkCount != null
+                    ? `Indexed ${chunkCount} chunks. Ready for semantic Q&A.`
+                    : 'Transcript indexed.'}
                 </p>
               )}
             </div>
           </div>
 
           <div className="workspace__search">
-            <form className="search-form" onSubmit={handleSearch}>
+            <form className="search-form" onSubmit={handleAsk}>
               <label className="search-form__label" htmlFor="search-query">
                 Ask about this video
               </label>
@@ -222,22 +297,27 @@ function App() {
                   id="search-query"
                   type="text"
                   placeholder={
-                    canSearch
+                    canAsk
                       ? 'What does the speaker say about…?'
                       : 'Waiting for transcript…'
                   }
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  disabled={!canSearch || answerBusy}
+                  disabled={!canAsk || answerBusy}
                 />
                 <button
                   type="submit"
                   className="btn btn--primary"
-                  disabled={!canSearch || answerBusy || !query.trim()}
+                  disabled={!canAsk || answerBusy || !query.trim()}
                 >
-                  Search
+                  Ask
                 </button>
               </div>
+              {askError && (
+                <p className="form-error" role="alert">
+                  {askError}
+                </p>
+              )}
             </form>
 
             <div className="panel panel--answer">
@@ -254,17 +334,40 @@ function App() {
 
               {answerBusy ? (
                 <AnswerSkeleton />
-              ) : phase === 'answer_ready' ? (
-                <div className="answer-content">
-                  <p>
-                    This is a placeholder answer. Wire this panel to your
-                    semantic search API — citations and timestamps can sit
-                    here.
-                  </p>
-                </div>
+              ) : phase === 'answer_ready' && answer ? (
+                <>
+                  <div className="answer-content">
+                    <p>{answer}</p>
+                  </div>
+                  {sources.length > 0 && (
+                    <div className="sources">
+                      <h3 className="sources__title">Sources</h3>
+                      <ul className="results-list">
+                        {sources.map((s, i) => (
+                          <li key={`${s.start}-${i}`} className="result-card">
+                            <div className="result-card__meta">
+                              <span className="result-card__score">
+                                {(s.score * 100).toFixed(0)}% match
+                              </span>
+                              <a
+                                className="result-card__timestamp"
+                                href={`https://www.youtube.com/watch?v=${videoId}&t=${Math.floor(s.start)}`}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Jump to {formatTimestamp(s.start)}
+                              </a>
+                            </div>
+                            <p className="result-card__text">{s.text}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </>
               ) : (
                 <p className="panel__placeholder panel__placeholder--muted">
-                  Your synthesized answer will show up here after you search.
+                  Your RAG answer and source chunks will appear here.
                 </p>
               )}
             </div>
