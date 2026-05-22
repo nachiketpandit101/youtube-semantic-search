@@ -81,6 +81,8 @@ Open `http://localhost:5173`. Vite proxies `/api` to the backend on port 8000.
 2. Wait for indexing (transcript appears in the left panel).
 3. Type a question and click **Ask**.
 4. Read the answer and source chunks with timestamp links.
+5. Use the **History** sidebar to switch between indexed videos instantly (no re-embedding).
+6. Click **x** on a history item to delete its Pinecone namespace and remove it from history.
 
 ## API endpoints
 
@@ -90,6 +92,8 @@ Open `http://localhost:5173`. Vite proxies `/api` to the backend on port 8000.
 | POST   | `/transcript` | Fetch transcript, embed, upsert      |
 | POST   | `/search`     | Semantic search only (no LLM)        |
 | POST   | `/ask`        | RAG: search + Groq answer            |
+| GET    | `/video-info` | Title and thumbnail for a URL        |
+| DELETE | `/videos/{id}`| Delete Pinecone namespace for a video |
 
 Example:
 

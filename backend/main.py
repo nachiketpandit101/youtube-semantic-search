@@ -1,7 +1,9 @@
 # main.py
 import asyncio
+import json
 import os
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.request import urlopen
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -242,6 +244,45 @@ async def health():
         }
 
     return {"ok": len(errors) == 0, "checks": checks, "errors": errors}
+
+
+def _fetch_video_info(url: str, video_id: str) -> dict:
+    oembed_url = "https://www.youtube.com/oembed?" + urlencode(
+        {"url": url, "format": "json"}
+    )
+    with urlopen(oembed_url, timeout=10) as resp:
+        data = json.loads(resp.read().decode())
+    return {
+        "video_id": video_id,
+        "title": data.get("title") or video_id,
+        "thumbnail_url": data.get("thumbnail_url")
+        or f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg",
+    }
+
+
+@app.get("/video-info")
+async def video_info(url: str):
+    if not url:
+        raise HTTPException(status_code=400, detail="url query param is required")
+    try:
+        video_id = extract_video_id(url)
+        return await asyncio.to_thread(_fetch_video_info, url, video_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Video info failed: {exc}") from exc
+
+
+@app.delete("/videos/{video_id}")
+async def delete_video(video_id: str):
+    """Remove all vectors for this video (Pinecone namespace)."""
+    if not video_id.strip():
+        raise HTTPException(status_code=400, detail="video_id is required")
+    try:
+        index.delete(delete_all=True, namespace=video_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Delete failed: {exc}") from exc
+    return {"video_id": video_id, "deleted": True}
 
 
 @app.post("/transcript")
