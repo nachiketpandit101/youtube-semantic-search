@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useCallback, useRef, useState, type FormEvent } from 'react'
 import './App.css'
 
 const API = import.meta.env.VITE_API_URL ?? '/api'
@@ -129,6 +129,7 @@ function StatusPill({
 }
 
 function App() {
+  const playerRef = useRef<HTMLIFrameElement>(null)
   const [url, setUrl] = useState('')
   const [videoId, setVideoId] = useState<string | null>(null)
   const [phase, setPhase] = useState<Phase>('idle')
@@ -139,6 +140,31 @@ function App() {
   const [transcript, setTranscript] = useState<TranscriptLine[]>([])
   const [answer, setAnswer] = useState<string | null>(null)
   const [sources, setSources] = useState<Source[]>([])
+
+  const seekTo = useCallback(
+    (seconds: number) => {
+      const iframe = playerRef.current
+      if (!iframe || !videoId) return
+
+      const t = Math.floor(seconds)
+      const win = iframe.contentWindow
+      if (win) {
+        win.postMessage(
+          JSON.stringify({ event: 'command', func: 'seekTo', args: [t, true] }),
+          '*',
+        )
+        win.postMessage(
+          JSON.stringify({ event: 'command', func: 'playVideo', args: '' }),
+          '*',
+        )
+      }
+
+      iframe
+        .closest('.video-embed')
+        ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    },
+    [videoId],
+  )
 
   const handleLoadVideo = async (e: FormEvent) => {
     e.preventDefault()
@@ -271,7 +297,9 @@ function App() {
           <div className="workspace__video">
             <div className="video-embed">
               <iframe
-                src={`https://www.youtube.com/embed/${videoId}`}
+                key={videoId}
+                ref={playerRef}
+                src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`}
                 title="YouTube video player"
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                 allowFullScreen
@@ -308,13 +336,8 @@ function App() {
                       <button
                         type="button"
                         className="transcript-line__time"
-                        onClick={() => {
-                          const el = document.querySelector('.video-embed iframe')
-                          if (el instanceof HTMLIFrameElement) {
-                            el.src = `https://www.youtube.com/embed/${videoId}?start=${Math.floor(line.start)}&autoplay=1`
-                          }
-                        }}
-                        title="Jump to this moment"
+                        onClick={() => seekTo(line.start)}
+                        title="Jump to this moment in the player"
                       >
                         {formatTimestamp(line.start)}
                       </button>
@@ -393,14 +416,14 @@ function App() {
                               <span className="result-card__score">
                                 {(s.score * 100).toFixed(0)}% match
                               </span>
-                              <a
+                              <button
+                                type="button"
                                 className="result-card__timestamp"
-                                href={`https://www.youtube.com/watch?v=${videoId}&t=${Math.floor(s.start)}`}
-                                target="_blank"
-                                rel="noreferrer"
+                                onClick={() => seekTo(s.start)}
+                                title="Jump to this moment in the player"
                               >
                                 Jump to {formatTimestamp(s.start)}
-                              </a>
+                              </button>
                             </div>
                             <p className="result-card__text">{s.text}</p>
                           </li>
