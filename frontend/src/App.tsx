@@ -518,8 +518,65 @@ function App() {
                 </div>
               </div>
 
-              <div className="workspace__search">
-                <form className="search-form" onSubmit={handleAsk}>
+              <div className="workspace__chat">
+                <div className="chat-thread">
+                  <div className="panel panel--answer">
+                    <div className="panel__header">
+                      <h2 className="panel__title">Answer</h2>
+                      {answerBusy && (
+                        <StatusPill
+                          variant="answer"
+                          label="Generating answer…"
+                          loading
+                        />
+                      )}
+                    </div>
+
+                    {answerBusy ? (
+                      <AnswerSkeleton />
+                    ) : phase === 'answer_ready' && answer ? (
+                      <>
+                        <div className="answer-content">
+                          <p>{answer}</p>
+                        </div>
+                        {sources.length > 0 && (
+                          <div className="sources">
+                            <h3 className="sources__title">Sources</h3>
+                            <ul className="results-list">
+                              {sources.map((s, i) => (
+                                <li
+                                  key={`${s.start}-${i}`}
+                                  className="result-card"
+                                >
+                                  <div className="result-card__meta">
+                                    <span className="result-card__score">
+                                      {(s.score * 100).toFixed(0)}% match
+                                    </span>
+                                    <button
+                                      type="button"
+                                      className="result-card__timestamp"
+                                      onClick={() => seekTo(s.start)}
+                                      title="Jump to this moment in the player"
+                                    >
+                                      Jump to {formatTimestamp(s.start)}
+                                    </button>
+                                  </div>
+                                  <p className="result-card__text">{s.text}</p>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <p className="panel__placeholder panel__placeholder--muted">
+                        Your RAG answer and source chunks will appear here.
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <form className="search-form chat-composer" onSubmit={handleAsk}>
                   <label className="search-form__label" htmlFor="search-query">
                     Ask about this video
                   </label>
@@ -550,58 +607,6 @@ function App() {
                     </p>
                   )}
                 </form>
-
-                <div className="panel panel--answer">
-                  <div className="panel__header">
-                    <h2 className="panel__title">Answer</h2>
-                    {answerBusy && (
-                      <StatusPill
-                        variant="answer"
-                        label="Generating answer…"
-                        loading
-                      />
-                    )}
-                  </div>
-
-                  {answerBusy ? (
-                    <AnswerSkeleton />
-                  ) : phase === 'answer_ready' && answer ? (
-                    <>
-                      <div className="answer-content">
-                        <p>{answer}</p>
-                      </div>
-                      {sources.length > 0 && (
-                        <div className="sources">
-                          <h3 className="sources__title">Sources</h3>
-                          <ul className="results-list">
-                            {sources.map((s, i) => (
-                              <li key={`${s.start}-${i}`} className="result-card">
-                                <div className="result-card__meta">
-                                  <span className="result-card__score">
-                                    {(s.score * 100).toFixed(0)}% match
-                                  </span>
-                                  <button
-                                    type="button"
-                                    className="result-card__timestamp"
-                                    onClick={() => seekTo(s.start)}
-                                    title="Jump to this moment in the player"
-                                  >
-                                    Jump to {formatTimestamp(s.start)}
-                                  </button>
-                                </div>
-                                <p className="result-card__text">{s.text}</p>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <p className="panel__placeholder panel__placeholder--muted">
-                      Your RAG answer and source chunks will appear here.
-                    </p>
-                  )}
-                </div>
               </div>
             </section>
           )}
