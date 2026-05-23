@@ -93,6 +93,7 @@ Open `http://localhost:5173`. Vite proxies `/api` to the backend on port 8000.
 | POST   | `/search`     | Semantic search only (no LLM)        |
 | POST   | `/ask`        | RAG: search + Groq answer            |
 | GET    | `/video-info` | Title and thumbnail for a URL        |
+| GET    | `/videos/{id}/status` | Check if video is already indexed in Pinecone |
 | DELETE | `/videos/{id}`| Delete Pinecone namespace for a video |
 
 Example:

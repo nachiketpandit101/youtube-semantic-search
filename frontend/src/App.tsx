@@ -150,6 +150,7 @@ function App() {
   const [urlError, setUrlError] = useState<string | null>(null)
   const [askError, setAskError] = useState<string | null>(null)
   const [chunkCount, setChunkCount] = useState<number | null>(null)
+  const [transcriptCached, setTranscriptCached] = useState(false)
   const [transcript, setTranscript] = useState<TranscriptLine[]>([])
   const [answer, setAnswer] = useState<string | null>(null)
   const [sources, setSources] = useState<Source[]>([])
@@ -166,6 +167,7 @@ function App() {
       setVideoId(item.videoId)
       setUrl(item.url)
       setChunkCount(item.chunkCount)
+      setTranscriptCached(true)
       setTranscript(item.transcript)
       setPhase('transcript_ready')
       clearAnswerState()
@@ -245,6 +247,7 @@ function App() {
       setPhase('idle')
       setChunkCount(null)
       setTranscript([])
+      setTranscriptCached(false)
       clearAnswerState()
       setActiveVideoId(null)
     }
@@ -268,6 +271,7 @@ function App() {
     setUrlError(null)
     clearAnswerState()
     setChunkCount(null)
+    setTranscriptCached(false)
     setTranscript([])
     setVideoId(id)
     setPhase('loading_transcript')
@@ -308,6 +312,7 @@ function App() {
       }
 
       setChunkCount(item.chunkCount)
+      setTranscriptCached(Boolean(data.cached))
       setTranscript(item.transcript)
       setPhase('transcript_ready')
       setHistory(upsertHistoryItem(item))
@@ -316,6 +321,7 @@ function App() {
       setPhase('idle')
       setVideoId(null)
       setActiveVideoId(null)
+      setTranscriptCached(false)
       setUrlError(
         err instanceof Error ? err.message : 'Failed to load transcript',
       )
@@ -472,7 +478,9 @@ function App() {
                       transcriptBusy
                         ? 'Loading transcript…'
                         : chunkCount != null
-                          ? `Transcript ready · ${chunkCount} chunks`
+                          ? transcriptCached
+                            ? `Already indexed · ${chunkCount} chunks`
+                            : `Transcript ready · ${chunkCount} chunks`
                           : 'Transcript ready'
                     }
                     loading={transcriptBusy}

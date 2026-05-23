@@ -121,6 +121,21 @@ async def embed_chunks(chunks: list[dict]) -> list[dict]:
     return await asyncio.to_thread(embed_chunks_sync, chunks)
 
 
+def namespace_vector_count(video_id: str) -> int:
+    """Return how many vectors are stored for a video namespace."""
+    stats = index.describe_index_stats()
+    namespaces = stats.get("namespaces") if isinstance(stats, dict) else getattr(stats, "namespaces", None)
+    if not namespaces:
+        return 0
+
+    ns = namespaces.get(video_id)
+    if ns is None:
+        return 0
+    if isinstance(ns, dict):
+        return int(ns.get("vector_count", 0))
+    return int(getattr(ns, "vector_count", 0))
+
+
 def upsert_chunks(chunks: list[dict], video_id: str) -> int:
     vectors = []
     for i, chunk in enumerate(chunks):
@@ -273,6 +288,22 @@ async def video_info(url: str):
         raise HTTPException(status_code=502, detail=f"Video info failed: {exc}") from exc
 
 
+@app.get("/videos/{video_id}/status")
+async def video_status(video_id: str):
+    """Check whether a video is already indexed in Pinecone."""
+    if not video_id.strip():
+        raise HTTPException(status_code=400, detail="video_id is required")
+    try:
+        count = await asyncio.to_thread(namespace_vector_count, video_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Status check failed: {exc}") from exc
+    return {
+        "video_id": video_id,
+        "indexed": count > 0,
+        "chunk_count": count,
+    }
+
+
 @app.delete("/videos/{video_id}")
 async def delete_video(video_id: str):
     """Remove all vectors for this video (Pinecone namespace)."""
@@ -291,22 +322,29 @@ async def get_transcript(body: dict):
     if not url:
         raise HTTPException(status_code=400, detail="url is required")
 
+    cached = False
     try:
         video_id = extract_video_id(url)
+        existing_count = await asyncio.to_thread(namespace_vector_count, video_id)
+
         ytt_api = YouTubeTranscriptApi()
         raw = ytt_api.fetch(video_id)
         lines = normalize_transcript(raw)
         if not lines:
             raise ValueError("No transcript captions found for this video")
 
-        chunks = chunk_transcript(lines)
-        if not chunks:
-            raise ValueError("Transcript too short to index")
+        if existing_count > 0:
+            cached = True
+            upserted = existing_count
+        else:
+            chunks = chunk_transcript(lines)
+            if not chunks:
+                raise ValueError("Transcript too short to index")
 
-        chunks = await embed_chunks(chunks)
-        upserted = upsert_chunks(chunks, video_id)
-        if upserted == 0:
-            raise ValueError("Failed to store vectors in Pinecone")
+            chunks = await embed_chunks(chunks)
+            upserted = upsert_chunks(chunks, video_id)
+            if upserted == 0:
+                raise ValueError("Failed to store vectors in Pinecone")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -319,6 +357,7 @@ async def get_transcript(body: dict):
         "video_id": video_id,
         "chunk_count": upserted,
         "indexed": True,
+        "cached": cached,
         "embedding_model": EMBEDDING_MODEL_NAME,
         "dimensions": EMBEDDING_DIM,
         "transcript": lines,
