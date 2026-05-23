@@ -63,6 +63,13 @@ Check connectivity:
 curl http://127.0.0.1:8000/health
 ```
 
+Run backend tests:
+
+```bash
+cd backend
+pytest
+```
+
 ## Frontend setup
 
 In a second terminal:

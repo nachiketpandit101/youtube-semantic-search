@@ -2,7 +2,7 @@
 import asyncio
 import json
 import os
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import urlencode
 from urllib.request import urlopen
 
 from dotenv import load_dotenv
@@ -12,6 +12,13 @@ from openai import AsyncOpenAI
 from pinecone import Pinecone
 from sentence_transformers import SentenceTransformer
 from youtube_transcript_api import YouTubeTranscriptApi
+
+from rag_core import (
+    chunk_transcript,
+    extract_video_id,
+    filter_ranked_chunks,
+    normalize_transcript,
+)
 
 load_dotenv()
 
@@ -36,58 +43,6 @@ index = pc.Index(os.getenv("PINECONE_INDEX_NAME", "youtube-search"))
 
 # BGE cosine scores are usually lower than OpenAI's; 0.75 filters out everything.
 SCORE_THRESHOLD = float(os.getenv("SCORE_THRESHOLD", "0.35"))
-
-
-def extract_video_id(url: str) -> str:
-    """Pull the 11-char id from watch or youtu.be links."""
-    parsed = urlparse(url.strip())
-
-    if parsed.hostname in ("youtu.be", "www.youtu.be"):
-        return parsed.path.lstrip("/").split("/")[0]
-
-    if parsed.hostname and "youtube.com" in parsed.hostname:
-        video_id = parse_qs(parsed.query).get("v", [None])[0]
-        if video_id:
-            return video_id
-
-    raise ValueError(f"Could not get video id from: {url}")
-
-
-def normalize_transcript(transcript) -> list[dict]:
-    """YouTube API objects → plain [{text, start}, ...] for UI + chunking."""
-    lines = []
-    for entry in transcript:
-        text = entry["text"] if isinstance(entry, dict) else entry.text
-        start = entry["start"] if isinstance(entry, dict) else entry.start
-        text = str(text).replace("\n", " ").strip()
-        if text:
-            lines.append({"text": text, "start": float(start)})
-    return lines
-
-
-def chunk_transcript(transcript, chunk_size=300, overlap=50):
-    """Split transcript into overlapping word windows for embedding/search."""
-    words = []
-    for entry in transcript:
-        text = entry["text"] if isinstance(entry, dict) else entry.text
-        start = float(entry["start"] if isinstance(entry, dict) else entry.start)
-        for word in str(text).split():
-            words.append({"word": word, "start": start})
-
-    chunks = []
-    i = 0
-    while i < len(words):
-        chunk_words = words[i : i + chunk_size]
-        if not chunk_words:
-            break
-        chunks.append(
-            {
-                "text": " ".join(w["word"] for w in chunk_words),
-                "start": chunk_words[0]["start"],
-            }
-        )
-        i += chunk_size - overlap
-    return chunks
 
 
 def _encode_texts(texts: list[str], *, is_query: bool) -> list[list[float]]:
@@ -194,8 +149,7 @@ async def search_chunks(question: str, video_id: str) -> list[dict]:
         )
 
     # Prefer matches above threshold; if none pass, keep top results anyway
-    filtered = [c for c in ranked if c["score"] >= SCORE_THRESHOLD]
-    return filtered if filtered else ranked[:3]
+    return filter_ranked_chunks(ranked, SCORE_THRESHOLD)
 
 
 app = FastAPI()

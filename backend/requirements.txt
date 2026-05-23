@@ -5,3 +5,5 @@ youtube-transcript-api
 pinecone
 sentence-transformers
 openai
+pytest
+pytest-asyncio
