@@ -417,24 +417,40 @@ async def ask(body: dict):
         }
 
     context = "\n\n".join(c["text"] for c in chunks)
+    prior_turns = body.get("history") or []
+    if not isinstance(prior_turns, list):
+        prior_turns = []
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Answer questions using ONLY the provided transcript context. "
+                "If the answer isn't in the context, say so. "
+                "Be concise and cite timestamps when helpful."
+            ),
+        },
+    ]
+
+    for turn in prior_turns[-6:]:
+        if not isinstance(turn, dict):
+            continue
+        role = turn.get("role")
+        content = turn.get("content")
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": str(content)})
+
+    messages.append(
+        {
+            "role": "user",
+            "content": f"Context:\n{context}\n\nQuestion: {question}",
+        }
+    )
 
     try:
         response = await llm_client.chat.completions.create(
             model=LLM_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Answer questions using ONLY the provided transcript context. "
-                        "If the answer isn't in the context, say so. "
-                        "Be concise and cite timestamps when helpful."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": f"Context:\n{context}\n\nQuestion: {question}",
-                },
-            ],
+            messages=messages,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"LLM failed: {exc}") from exc

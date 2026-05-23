@@ -7,6 +7,13 @@ import {
   type MouseEvent,
 } from 'react'
 import {
+  clearChat,
+  createMessageId,
+  loadChat,
+  saveChat,
+  type ChatMessage,
+} from './chat'
+import {
   getActiveVideoId,
   loadHistory,
   removeHistoryItem,
@@ -26,12 +33,6 @@ type Phase =
   | 'transcript_ready'
   | 'generating_answer'
   | 'answer_ready'
-
-type Source = {
-  text: string
-  start: number
-  score: number
-}
 
 function extractVideoId(url: string): string | null {
   const trimmed = url.trim()
@@ -142,6 +143,7 @@ function StatusPill({
 
 function App() {
   const playerRef = useRef<HTMLIFrameElement>(null)
+  const chatEndRef = useRef<HTMLDivElement>(null)
   const [history, setHistory] = useState<VideoHistoryItem[]>(() => loadHistory())
   const [url, setUrl] = useState('')
   const [videoId, setVideoId] = useState<string | null>(null)
@@ -152,15 +154,28 @@ function App() {
   const [chunkCount, setChunkCount] = useState<number | null>(null)
   const [transcriptCached, setTranscriptCached] = useState(false)
   const [transcript, setTranscript] = useState<TranscriptLine[]>([])
-  const [answer, setAnswer] = useState<string | null>(null)
-  const [sources, setSources] = useState<Source[]>([])
+  const [messages, setMessages] = useState<ChatMessage[]>([])
 
-  const clearAnswerState = useCallback(() => {
+  const resetComposer = useCallback(() => {
     setAskError(null)
-    setAnswer(null)
-    setSources([])
     setQuery('')
   }, [])
+
+  const loadMessagesForVideo = useCallback(
+    (id: string | null) => {
+      setMessages(id ? loadChat(id) : [])
+      resetComposer()
+    },
+    [resetComposer],
+  )
+
+  const persistMessages = useCallback(
+    (id: string, next: ChatMessage[]) => {
+      setMessages(next)
+      saveChat(id, next)
+    },
+    [],
+  )
 
   const activateVideo = useCallback(
     (item: VideoHistoryItem) => {
@@ -170,10 +185,10 @@ function App() {
       setTranscriptCached(true)
       setTranscript(item.transcript)
       setPhase('transcript_ready')
-      clearAnswerState()
+      loadMessagesForVideo(item.videoId)
       setActiveVideoId(item.videoId)
     },
-    [clearAnswerState],
+    [loadMessagesForVideo],
   )
 
   useEffect(() => {
@@ -182,6 +197,10 @@ function App() {
     const item = loadHistory().find((h) => h.videoId === activeId)
     if (item) activateVideo(item)
   }, [activateVideo])
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }, [messages, phase])
 
   const seekTo = useCallback(
     (seconds: number) => {
@@ -238,6 +257,7 @@ function App() {
       return
     }
 
+    clearChat(item.videoId)
     const next = removeHistoryItem(item.videoId)
     setHistory(next)
 
@@ -248,7 +268,7 @@ function App() {
       setChunkCount(null)
       setTranscript([])
       setTranscriptCached(false)
-      clearAnswerState()
+      loadMessagesForVideo(null)
       setActiveVideoId(null)
     }
   }
@@ -269,10 +289,11 @@ function App() {
     }
 
     setUrlError(null)
-    clearAnswerState()
+    resetComposer()
     setChunkCount(null)
     setTranscriptCached(false)
     setTranscript([])
+    setMessages([])
     setVideoId(id)
     setPhase('loading_transcript')
 
@@ -315,6 +336,7 @@ function App() {
       setTranscriptCached(Boolean(data.cached))
       setTranscript(item.transcript)
       setPhase('transcript_ready')
+      loadMessagesForVideo(id)
       setHistory(upsertHistoryItem(item))
       setActiveVideoId(id)
     } catch (err) {
@@ -338,24 +360,44 @@ function App() {
       return
     }
 
+    const question = query.trim()
+    const userMessage: ChatMessage = {
+      id: createMessageId(),
+      role: 'user',
+      content: question,
+      createdAt: Date.now(),
+    }
+    const pendingMessages = [...messages, userMessage]
+
     setAskError(null)
-    setAnswer(null)
-    setSources([])
+    setQuery('')
+    persistMessages(videoId, pendingMessages)
     setPhase('generating_answer')
 
     try {
       const res = await fetch(`${API}/ask`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: query, video_id: videoId }),
+        body: JSON.stringify({
+          question,
+          video_id: videoId,
+          history: messages.map(({ role, content }) => ({ role, content })),
+        }),
       })
       if (!res.ok) throw new Error(await parseApiError(res))
       const data = await res.json()
-      setAnswer(data.answer)
-      setSources(data.sources ?? [])
+      const assistantMessage: ChatMessage = {
+        id: createMessageId(),
+        role: 'assistant',
+        content: data.answer,
+        sources: data.sources ?? [],
+        createdAt: Date.now(),
+      }
+      persistMessages(videoId, [...pendingMessages, assistantMessage])
       setPhase('answer_ready')
     } catch (err) {
-      setPhase('transcript_ready')
+      persistMessages(videoId, messages)
+      setPhase(messages.length > 0 ? 'answer_ready' : 'transcript_ready')
       setAskError(err instanceof Error ? err.message : 'Failed to generate answer')
     }
   }
@@ -528,9 +570,9 @@ function App() {
 
               <div className="workspace__chat">
                 <div className="chat-thread">
-                  <div className="panel panel--answer">
+                  <div className="panel panel--chat">
                     <div className="panel__header">
-                      <h2 className="panel__title">Answer</h2>
+                      <h2 className="panel__title">Chat</h2>
                       {answerBusy && (
                         <StatusPill
                           variant="answer"
@@ -540,47 +582,62 @@ function App() {
                       )}
                     </div>
 
-                    {answerBusy ? (
-                      <AnswerSkeleton />
-                    ) : phase === 'answer_ready' && answer ? (
-                      <>
-                        <div className="answer-content">
-                          <p>{answer}</p>
-                        </div>
-                        {sources.length > 0 && (
-                          <div className="sources">
-                            <h3 className="sources__title">Sources</h3>
-                            <ul className="results-list">
-                              {sources.map((s, i) => (
-                                <li
-                                  key={`${s.start}-${i}`}
-                                  className="result-card"
-                                >
-                                  <div className="result-card__meta">
-                                    <span className="result-card__score">
-                                      {(s.score * 100).toFixed(0)}% match
-                                    </span>
-                                    <button
-                                      type="button"
-                                      className="result-card__timestamp"
-                                      onClick={() => seekTo(s.start)}
-                                      title="Jump to this moment in the player"
-                                    >
-                                      Jump to {formatTimestamp(s.start)}
-                                    </button>
-                                  </div>
-                                  <p className="result-card__text">{s.text}</p>
-                                </li>
-                              ))}
-                            </ul>
+                    <div className="chat-messages">
+                      {messages.length === 0 && !answerBusy ? (
+                        <p className="panel__placeholder panel__placeholder--muted">
+                          Ask a question to start a conversation about this
+                          video.
+                        </p>
+                      ) : (
+                        messages.map((message) => (
+                          <div
+                            key={message.id}
+                            className={`chat-message chat-message--${message.role}`}
+                          >
+                            <p className="chat-message__label">
+                              {message.role === 'user' ? 'You' : 'Answer'}
+                            </p>
+                            <div className="chat-message__bubble">
+                              <p>{message.content}</p>
+                            </div>
+                            {message.role === 'assistant' &&
+                              message.sources &&
+                              message.sources.length > 0 && (
+                                <div className="sources sources--inline">
+                                  <h3 className="sources__title">Sources</h3>
+                                  <ul className="results-list">
+                                    {message.sources.map((s, i) => (
+                                      <li
+                                        key={`${message.id}-${s.start}-${i}`}
+                                        className="result-card"
+                                      >
+                                        <div className="result-card__meta">
+                                          <span className="result-card__score">
+                                            {(s.score * 100).toFixed(0)}% match
+                                          </span>
+                                          <button
+                                            type="button"
+                                            className="result-card__timestamp"
+                                            onClick={() => seekTo(s.start)}
+                                            title="Jump to this moment in the player"
+                                          >
+                                            Jump to {formatTimestamp(s.start)}
+                                          </button>
+                                        </div>
+                                        <p className="result-card__text">
+                                          {s.text}
+                                        </p>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
                           </div>
-                        )}
-                      </>
-                    ) : (
-                      <p className="panel__placeholder panel__placeholder--muted">
-                        Your RAG answer and source chunks will appear here.
-                      </p>
-                    )}
+                        ))
+                      )}
+                      {answerBusy && <AnswerSkeleton />}
+                      <div ref={chatEndRef} />
+                    </div>
                   </div>
                 </div>
 
